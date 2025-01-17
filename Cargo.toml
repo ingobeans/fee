@@ -5,3 +5,9 @@ edition = "2021"
 
 [dependencies]
 crossterm = "0.28.1"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
