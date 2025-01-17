@@ -1,6 +1,6 @@
 use std::{
     env::current_dir,
-    io::{stdout, Cursor, Result, Stdout, Write},
+    io::{stdout, Result, Stdout, Write},
     path::PathBuf,
 };
 
@@ -120,7 +120,7 @@ impl Fee {
             }
             index += 1;
         }
-        for file in contents.files {
+        for _ in contents.files {
             if index == self.selection {
                 break;
             }
