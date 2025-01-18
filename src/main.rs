@@ -1,8 +1,8 @@
 use std::{
     collections::VecDeque,
     env::current_dir,
-    io::{stdout, Read, Result, Stdout, Write},
-    path::PathBuf,
+    io::{self, stdout, Error, Read, Stdout, Write},
+    path::{Path, PathBuf},
     process::Command,
 };
 
@@ -13,6 +13,8 @@ use crossterm::{
     style::{Color, ResetColor, SetBackgroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
+use dirs::config_dir;
+use serde::{Deserialize, Serialize};
 
 struct Fee {
     listening: bool,
@@ -58,7 +60,7 @@ impl Fee {
             current_contents: DirectoryContents::new(),
         }
     }
-    fn cleanup_terminal(&mut self) -> Result<()> {
+    fn cleanup_terminal(&mut self) -> std::io::Result<()> {
         queue!(
             self.stdout,
             Clear(ClearType::All),
@@ -70,7 +72,7 @@ impl Fee {
         disable_raw_mode()?;
         Ok(())
     }
-    fn prepare_terminal(&mut self) -> Result<()> {
+    fn prepare_terminal(&mut self) -> std::io::Result<()> {
         self.stdout = stdout();
         self.stdout.flush()?;
         queue!(
@@ -84,7 +86,7 @@ impl Fee {
         self.current_contents = self.get_cwd_contents()?;
         Ok(())
     }
-    fn update(&mut self) -> Result<()> {
+    fn update(&mut self) -> std::io::Result<()> {
         queue!(
             self.stdout,
             Clear(ClearType::All),
@@ -96,7 +98,7 @@ impl Fee {
         self.stdout.flush()?;
         Ok(())
     }
-    fn get_cwd_contents(&self) -> Result<DirectoryContents> {
+    fn get_cwd_contents(&self) -> std::io::Result<DirectoryContents> {
         let mut dirs = vec![];
         let mut files = vec![];
 
@@ -118,7 +120,7 @@ impl Fee {
         Ok(DirectoryContents::from(dirs, files))
     }
 
-    fn print_line(&mut self, text: &str, x: u16, y: u16, highlighted: bool) -> Result<()> {
+    fn print_line(&mut self, text: &str, x: u16, y: u16, highlighted: bool) -> std::io::Result<()> {
         queue!(self.stdout, cursor::MoveTo(x, y))?;
         if highlighted {
             queue!(self.stdout, SetBackgroundColor(Color::White))?;
@@ -129,7 +131,7 @@ impl Fee {
         }
         Ok(())
     }
-    fn draw_text(&mut self) -> Result<()> {
+    fn draw_text(&mut self) -> std::io::Result<()> {
         let contents = self.current_contents.clone();
         let mut index = 0;
         for dir in contents.dirs {
@@ -142,7 +144,7 @@ impl Fee {
         }
         Ok(())
     }
-    fn select(&mut self) -> Result<()> {
+    fn select(&mut self) -> std::io::Result<()> {
         let contents = self.current_contents.clone();
         let mut index = 0;
         for dir in contents.dirs {
@@ -207,7 +209,7 @@ impl Fee {
         }
         Ok(())
     }
-    fn go_back(&mut self) -> Result<()> {
+    fn go_back(&mut self) -> std::io::Result<()> {
         let parent = self.cwd.parent();
         if let Some(parent) = parent {
             self.cwd = parent.to_path_buf();
@@ -230,7 +232,7 @@ impl Fee {
             self.selection += 1;
         }
     }
-    fn handle_keypress(&mut self, event: Event) -> Result<()> {
+    fn handle_keypress(&mut self, event: Event) -> std::io::Result<()> {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
                 match key.code {
@@ -253,7 +255,7 @@ impl Fee {
         Ok(())
     }
 
-    fn listen(&mut self) -> Result<()> {
+    fn listen(&mut self) -> std::io::Result<()> {
         self.listening = true;
         self.prepare_terminal()?;
         self.update()?;
@@ -265,12 +267,23 @@ impl Fee {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 struct Config {
     text_editor_command: Vec<String>,
     binary_editor_command: Vec<String>,
     wait_for_editor_exit: bool,
 }
-fn is_valid_utf8(path: &PathBuf) -> Result<bool> {
+impl Config {
+    fn default_config() -> Self {
+        Config {
+            text_editor_command: vec!["nano".to_string(), "$f".to_string()],
+            binary_editor_command: vec!["hexedit".to_string(), "$f".to_string()],
+            wait_for_editor_exit: true,
+        }
+    }
+}
+
+fn is_valid_utf8(path: &PathBuf) -> std::io::Result<bool> {
     let mut file = std::fs::File::open(path)?;
     let mut buf = [0; 128];
     let mut offset: isize = 0;
@@ -290,13 +303,43 @@ fn is_valid_utf8(path: &PathBuf) -> Result<bool> {
     }
 }
 
+fn append_to_path(p: PathBuf, s: &str) -> PathBuf {
+    let mut p = p.into_os_string();
+    p.push(s);
+    p.into()
+}
+
+fn get_config() -> Result<Config, Box<dyn std::error::Error>> {
+    let base_config_directory =
+        config_dir().ok_or(Error::other("Couldn't get config directory"))?;
+
+    if !Path::exists(&base_config_directory) {
+        Err(Error::other("Base config directory doesn't exist"))?;
+    }
+
+    let config_directory = append_to_path(base_config_directory, "/fee");
+
+    if !Path::exists(&config_directory) {
+        std::fs::create_dir(&config_directory)?;
+    }
+
+    let config_file_path = append_to_path(config_directory, "/config.json");
+
+    if Path::exists(&config_file_path) {
+        return Ok(serde_json::from_str(&std::fs::read_to_string(
+            &config_file_path,
+        )?)?);
+    }
+
+    let default_config = Config::default_config();
+    std::fs::write(&config_file_path, serde_json::to_string(&default_config)?)?;
+
+    Ok(default_config)
+}
+
 fn main() {
     let cwd = current_dir().unwrap();
-    let config = Config {
-        text_editor_command: vec!["banano".to_string(), "$f".to_string()],
-        binary_editor_command: vec!["hexed".to_string(), "$f".to_string()],
-        wait_for_editor_exit: true,
-    };
+    let config = get_config().expect("Couldn't load config!");
 
     let mut fee = Fee::new(cwd, config);
     fee.listen().unwrap();
