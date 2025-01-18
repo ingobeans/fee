@@ -10,7 +10,7 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     queue,
-    style::{Color, ResetColor, SetBackgroundColor},
+    style::{Color, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use dirs::config_dir;
@@ -120,10 +120,19 @@ impl Fee {
         Ok(DirectoryContents::from(dirs, files))
     }
 
-    fn print_line(&mut self, text: &str, x: u16, y: u16, highlighted: bool) -> io::Result<()> {
+    fn print_line(
+        &mut self,
+        text: &str,
+        x: u16,
+        y: u16,
+        color: Color,
+        highlighted: bool,
+    ) -> io::Result<()> {
         queue!(self.stdout, cursor::MoveTo(x, y))?;
+        queue!(self.stdout, SetForegroundColor(color))?;
         if highlighted {
             queue!(self.stdout, SetBackgroundColor(Color::White))?;
+            queue!(self.stdout, SetForegroundColor(Color::Black))?;
         }
         print!("{}", text);
         if highlighted {
@@ -134,14 +143,23 @@ impl Fee {
     fn draw_text(&mut self) -> io::Result<()> {
         let contents = self.current_contents.clone();
         let mut index = 0;
+        let default_dir_color = Color::Blue;
         for dir in contents.dirs {
-            self.print_line(&dir.0, 0, index, self.selection == index)?;
+            self.print_line(&dir.0, 0, index, default_dir_color, self.selection == index)?;
             index += 1;
         }
+        let default_file_color = Color::DarkCyan;
         for file in contents.files {
-            self.print_line(&file.0, 0, index, self.selection == index)?;
+            self.print_line(
+                &file.0,
+                0,
+                index,
+                default_file_color,
+                self.selection == index,
+            )?;
             index += 1;
         }
+        queue!(self.stdout, ResetColor)?;
         Ok(())
     }
     fn select(&mut self) -> io::Result<()> {
