@@ -1,7 +1,9 @@
 use std::{
-    env::current_dir,
+    collections::VecDeque,
+    env::{self, current_dir},
     io::{stdout, Result, Stdout, Write},
     path::PathBuf,
+    process::Command,
 };
 
 use crossterm::{
@@ -15,6 +17,7 @@ use crossterm::{
 struct Fee {
     listening: bool,
     cwd: PathBuf,
+    config: Config,
     stdout: Stdout,
     selection: u16,
     current_contents: DirectoryContents,
@@ -45,18 +48,29 @@ impl DirectoryContents {
 }
 
 impl Fee {
-    fn new(cwd: PathBuf) -> Self {
+    fn new(cwd: PathBuf, config: Config) -> Self {
         Fee {
             listening: false,
             cwd,
+            config,
             stdout: stdout(),
             selection: 0,
             current_contents: DirectoryContents::new(),
         }
     }
+    fn prepare_terminal(&mut self) -> Result<()> {
+        enable_raw_mode()?;
+        queue!(self.stdout, cursor::Hide)?;
+        self.current_contents = self.get_cwd_contents()?;
+        Ok(())
+    }
     fn update(&mut self) -> Result<()> {
-        queue!(self.stdout, Clear(ClearType::All))?;
-        queue!(self.stdout, cursor::MoveTo(0, 0))?;
+        queue!(
+            self.stdout,
+            Clear(ClearType::All),
+            cursor::MoveTo(0, 0),
+            ResetColor
+        )?;
         self.draw_text()?;
         queue!(self.stdout, cursor::MoveTo(0, 0))?;
         self.stdout.flush()?;
@@ -91,7 +105,7 @@ impl Fee {
         }
         print!("{}", text);
         if highlighted {
-            queue!(self.stdout, ResetColor)?;
+            queue!(self.stdout, SetBackgroundColor(Color::Reset))?;
         }
         Ok(())
     }
@@ -116,12 +130,47 @@ impl Fee {
                 self.cwd.push(&dir.0);
                 self.selection = 0;
                 self.current_contents = self.get_cwd_contents()?;
-                break;
+                return Ok(());
             }
             index += 1;
         }
-        for _ in contents.files {
+        for file in contents.files {
             if index == self.selection {
+                let mut filepath = self.cwd.clone();
+                filepath.push(&file.0);
+                let filepath = filepath
+                    .to_str()
+                    .ok_or(std::io::Error::other("Couldn't convert path to str."))?;
+
+                let mut parts: VecDeque<String> = [].into();
+
+                for part in &self.config.file_edit_command {
+                    if part == "$f" {
+                        parts.push_back(filepath.to_string());
+                    } else {
+                        parts.push_back(part.to_string());
+                    }
+                }
+
+                let first = parts.pop_front();
+                match first {
+                    Some(executable) => {
+                        let mut command = Command::new(executable);
+                        command.args(parts);
+                        if self.config.wait_for_editor_exit {
+                            command.spawn()?.wait()?;
+                            self.prepare_terminal()?;
+                            self.update()?;
+                        } else {
+                            command.spawn()?;
+                            self.prepare_terminal()?;
+                            self.update()?;
+                        }
+                    }
+                    None => {
+                        println!("No");
+                    }
+                }
                 break;
             }
             index += 1;
@@ -137,34 +186,34 @@ impl Fee {
         }
         Ok(())
     }
+    fn move_up(&mut self) {
+        if self.selection == 0 {
+            self.selection = self.current_contents.count - 1;
+        } else {
+            self.selection -= 1;
+        }
+    }
+    fn move_down(&mut self) {
+        if self.selection >= self.current_contents.count - 1 {
+            self.selection = 0;
+        } else {
+            self.selection += 1;
+        }
+    }
     fn handle_keypress(&mut self, event: Event) -> Result<()> {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
                 match key.code {
-                    KeyCode::Up => {
-                        if self.selection == 0 {
-                            self.selection = self.current_contents.count - 1;
-                        } else {
-                            self.selection -= 1;
-                        }
-                    }
-                    KeyCode::Down => {
-                        if self.selection >= self.current_contents.count - 1 {
-                            self.selection = 0;
-                        } else {
-                            self.selection += 1;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        self.select()?;
-                    }
+                    KeyCode::Up => self.move_up(),
+                    KeyCode::Down => self.move_down(),
+                    KeyCode::Enter => self.select()?,
+                    KeyCode::Right => self.select()?,
+                    KeyCode::Esc => self.go_back()?,
+                    KeyCode::Left => self.go_back()?,
                     KeyCode::Char(char) => {
                         if char == 'c' && key.modifiers.contains(KeyModifiers::CONTROL) {
                             self.listening = false;
                         }
-                    }
-                    KeyCode::Esc => {
-                        self.go_back()?;
                     }
                     _ => {}
                 }
@@ -176,9 +225,7 @@ impl Fee {
 
     fn listen(&mut self) -> Result<()> {
         self.listening = true;
-        enable_raw_mode()?;
-        queue!(self.stdout, cursor::Hide)?;
-        self.current_contents = self.get_cwd_contents()?;
+        self.prepare_terminal()?;
         self.update()?;
         while self.listening {
             self.handle_keypress(event::read()?)?;
@@ -190,8 +237,18 @@ impl Fee {
     }
 }
 
+struct Config {
+    file_edit_command: Vec<String>,
+    wait_for_editor_exit: bool,
+}
+
 fn main() {
     let cwd = current_dir().unwrap();
-    let mut fee = Fee::new(cwd);
+    let config = Config {
+        file_edit_command: ["banano".to_string(), "$f".to_string()].into(),
+        wait_for_editor_exit: true,
+    };
+
+    let mut fee = Fee::new(cwd, config);
     fee.listen().unwrap();
 }
