@@ -302,7 +302,7 @@ impl Config {
             binary_editor_command: vec!["hexedit".to_string(), "$f".to_string()],
             wait_for_editor_exit: true,
             dir_color: [59, 120, 255],
-            file_color: [58, 150, 221],
+            file_color: [46, 199, 219],
         }
     }
 }
