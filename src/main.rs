@@ -60,7 +60,7 @@ impl Fee {
             current_contents: DirectoryContents::new(),
         }
     }
-    fn cleanup_terminal(&mut self) -> std::io::Result<()> {
+    fn cleanup_terminal(&mut self) -> io::Result<()> {
         queue!(
             self.stdout,
             Clear(ClearType::All),
@@ -72,7 +72,7 @@ impl Fee {
         disable_raw_mode()?;
         Ok(())
     }
-    fn prepare_terminal(&mut self) -> std::io::Result<()> {
+    fn prepare_terminal(&mut self) -> io::Result<()> {
         self.stdout = stdout();
         self.stdout.flush()?;
         queue!(
@@ -86,7 +86,7 @@ impl Fee {
         self.current_contents = self.get_cwd_contents()?;
         Ok(())
     }
-    fn update(&mut self) -> std::io::Result<()> {
+    fn update(&mut self) -> io::Result<()> {
         queue!(
             self.stdout,
             Clear(ClearType::All),
@@ -98,7 +98,7 @@ impl Fee {
         self.stdout.flush()?;
         Ok(())
     }
-    fn get_cwd_contents(&self) -> std::io::Result<DirectoryContents> {
+    fn get_cwd_contents(&self) -> io::Result<DirectoryContents> {
         let mut dirs = vec![];
         let mut files = vec![];
 
@@ -107,7 +107,7 @@ impl Fee {
             let item_name = item
                 .file_name()
                 .to_str()
-                .ok_or(std::io::Error::other("Couldn't get filename of item."))?
+                .ok_or(io::Error::other("Couldn't get filename of item."))?
                 .to_string();
 
             if item_type.is_dir() {
@@ -120,7 +120,7 @@ impl Fee {
         Ok(DirectoryContents::from(dirs, files))
     }
 
-    fn print_line(&mut self, text: &str, x: u16, y: u16, highlighted: bool) -> std::io::Result<()> {
+    fn print_line(&mut self, text: &str, x: u16, y: u16, highlighted: bool) -> io::Result<()> {
         queue!(self.stdout, cursor::MoveTo(x, y))?;
         if highlighted {
             queue!(self.stdout, SetBackgroundColor(Color::White))?;
@@ -131,7 +131,7 @@ impl Fee {
         }
         Ok(())
     }
-    fn draw_text(&mut self) -> std::io::Result<()> {
+    fn draw_text(&mut self) -> io::Result<()> {
         let contents = self.current_contents.clone();
         let mut index = 0;
         for dir in contents.dirs {
@@ -144,7 +144,7 @@ impl Fee {
         }
         Ok(())
     }
-    fn select(&mut self) -> std::io::Result<()> {
+    fn select(&mut self) -> io::Result<()> {
         let contents = self.current_contents.clone();
         let mut index = 0;
         for dir in contents.dirs {
@@ -173,7 +173,7 @@ impl Fee {
 
                 let filepath_str = filepath
                     .to_str()
-                    .ok_or(std::io::Error::other("Couldn't convert path to str."))?;
+                    .ok_or(io::Error::other("Couldn't convert path to str."))?;
 
                 for part in command {
                     if part == "$f" {
@@ -209,7 +209,7 @@ impl Fee {
         }
         Ok(())
     }
-    fn go_back(&mut self) -> std::io::Result<()> {
+    fn go_back(&mut self) -> io::Result<()> {
         let parent = self.cwd.parent();
         if let Some(parent) = parent {
             self.cwd = parent.to_path_buf();
@@ -232,7 +232,7 @@ impl Fee {
             self.selection += 1;
         }
     }
-    fn handle_keypress(&mut self, event: Event) -> std::io::Result<()> {
+    fn handle_keypress(&mut self, event: Event) -> io::Result<()> {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
                 match key.code {
@@ -255,7 +255,7 @@ impl Fee {
         Ok(())
     }
 
-    fn listen(&mut self) -> std::io::Result<()> {
+    fn listen(&mut self) -> io::Result<()> {
         self.listening = true;
         self.prepare_terminal()?;
         self.update()?;
@@ -283,7 +283,7 @@ impl Config {
     }
 }
 
-fn is_valid_utf8(path: &PathBuf) -> std::io::Result<bool> {
+fn is_valid_utf8(path: &PathBuf) -> io::Result<bool> {
     let mut file = std::fs::File::open(path)?;
     let mut buf = [0; 128];
     let mut offset: isize = 0;
