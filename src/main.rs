@@ -58,9 +58,29 @@ impl Fee {
             current_contents: DirectoryContents::new(),
         }
     }
+    fn cleanup_terminal(&mut self) -> Result<()> {
+        queue!(
+            self.stdout,
+            Clear(ClearType::All),
+            cursor::Show,
+            cursor::MoveTo(0, 0),
+            ResetColor
+        )?;
+        self.stdout.flush()?;
+        disable_raw_mode()?;
+        Ok(())
+    }
     fn prepare_terminal(&mut self) -> Result<()> {
+        self.stdout = stdout();
+        self.stdout.flush()?;
+        queue!(
+            self.stdout,
+            Clear(ClearType::All),
+            cursor::Hide,
+            cursor::MoveTo(0, 0)
+        )?;
+        self.stdout.flush()?;
         enable_raw_mode()?;
-        queue!(self.stdout, cursor::Hide)?;
         self.current_contents = self.get_cwd_contents()?;
         Ok(())
     }
@@ -166,6 +186,7 @@ impl Fee {
                     Some(executable) => {
                         let mut command = Command::new(executable);
                         command.args(parts);
+                        self.cleanup_terminal()?;
                         if self.config.wait_for_editor_exit {
                             command.spawn()?.wait()?;
                             self.prepare_terminal()?;
@@ -239,9 +260,7 @@ impl Fee {
         while self.listening {
             self.handle_keypress(event::read()?)?;
         }
-        disable_raw_mode()?;
-        queue!(self.stdout, Clear(ClearType::All))?;
-        queue!(self.stdout, cursor::Show)?;
+        self.cleanup_terminal()?;
         Ok(())
     }
 }
