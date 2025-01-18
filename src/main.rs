@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
-    env::{self, current_dir},
-    io::{stdout, Result, Stdout, Write},
+    env::current_dir,
+    io::{stdout, Read, Result, Stdout, Write},
     path::PathBuf,
     process::Command,
 };
@@ -138,15 +138,24 @@ impl Fee {
             if index == self.selection {
                 let mut filepath = self.cwd.clone();
                 filepath.push(&file.0);
-                let filepath = filepath
+
+                let mut parts: VecDeque<String> = [].into();
+                let mut command = &self.config.text_editor_command;
+                if self.config.text_editor_command != self.config.binary_editor_command {
+                    // if the binary editor != the text editor
+                    // check if the file is utf-8 or if it should be read with the binary editor
+                    if !is_valid_utf8(&filepath)? {
+                        command = &self.config.binary_editor_command;
+                    }
+                }
+
+                let filepath_str = filepath
                     .to_str()
                     .ok_or(std::io::Error::other("Couldn't convert path to str."))?;
 
-                let mut parts: VecDeque<String> = [].into();
-
-                for part in &self.config.file_edit_command {
+                for part in command {
                     if part == "$f" {
-                        parts.push_back(filepath.to_string());
+                        parts.push_back(filepath_str.to_string());
                     } else {
                         parts.push_back(part.to_string());
                     }
@@ -238,14 +247,35 @@ impl Fee {
 }
 
 struct Config {
-    file_edit_command: Vec<String>,
+    text_editor_command: Vec<String>,
+    binary_editor_command: Vec<String>,
     wait_for_editor_exit: bool,
+}
+fn is_valid_utf8(path: &PathBuf) -> Result<bool> {
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0; 128];
+    let mut offset: isize = 0;
+    loop {
+        let bytes_read = file.read(&mut buf[offset as usize..])?;
+        if bytes_read == 0 {
+            return Ok(offset == 0);
+        }
+        match std::str::from_utf8(&buf[..(offset + bytes_read as isize) as usize]) {
+            Ok(_) => offset = 0,
+            Err(e) if e.error_len().is_some() => return Ok(false),
+            Err(e) => {
+                buf.copy_within(e.valid_up_to()..(offset + bytes_read as isize) as usize, 0);
+                offset += bytes_read as isize - e.valid_up_to() as isize;
+            }
+        }
+    }
 }
 
 fn main() {
     let cwd = current_dir().unwrap();
     let config = Config {
-        file_edit_command: ["banano".to_string(), "$f".to_string()].into(),
+        text_editor_command: vec!["banano".to_string(), "$f".to_string()],
+        binary_editor_command: vec!["hexed".to_string(), "$f".to_string()],
         wait_for_editor_exit: true,
     };
 
