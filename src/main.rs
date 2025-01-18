@@ -143,20 +143,22 @@ impl Fee {
     fn draw_text(&mut self) -> io::Result<()> {
         let contents = self.current_contents.clone();
         let mut index = 0;
-        let default_dir_color = Color::Blue;
+        let dir_color = Color::Rgb {
+            r: self.config.dir_color[0],
+            g: self.config.dir_color[1],
+            b: self.config.dir_color[2],
+        };
         for dir in contents.dirs {
-            self.print_line(&dir.0, 0, index, default_dir_color, self.selection == index)?;
+            self.print_line(&dir.0, 0, index, dir_color, self.selection == index)?;
             index += 1;
         }
-        let default_file_color = Color::DarkCyan;
+        let file_color = Color::Rgb {
+            r: self.config.file_color[0],
+            g: self.config.file_color[1],
+            b: self.config.file_color[2],
+        };
         for file in contents.files {
-            self.print_line(
-                &file.0,
-                0,
-                index,
-                default_file_color,
-                self.selection == index,
-            )?;
+            self.print_line(&file.0, 0, index, file_color, self.selection == index)?;
             index += 1;
         }
         queue!(self.stdout, ResetColor)?;
@@ -290,6 +292,8 @@ struct Config {
     text_editor_command: Vec<String>,
     binary_editor_command: Vec<String>,
     wait_for_editor_exit: bool,
+    dir_color: [u8; 3],
+    file_color: [u8; 3],
 }
 impl Config {
     fn default_config() -> Self {
@@ -297,6 +301,8 @@ impl Config {
             text_editor_command: vec!["nano".to_string(), "$f".to_string()],
             binary_editor_command: vec!["hexedit".to_string(), "$f".to_string()],
             wait_for_editor_exit: true,
+            dir_color: [59, 120, 255],
+            file_color: [58, 150, 221],
         }
     }
 }
