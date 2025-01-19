@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     collections::VecDeque,
     env::current_dir,
     io::{self, stdout, Error, Read, Stdout, Write},
@@ -16,30 +17,24 @@ use crossterm::{
 use dirs::config_dir;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
-struct Directory(String);
-#[derive(Clone, Debug)]
-struct File(String);
+enum ItemType {
+    File,
+    Directory,
+}
 
-#[derive(Clone, Debug)]
-struct DirectoryContents {
-    dirs: Vec<Directory>,
-    files: Vec<File>,
-    count: u16,
+struct Item {
+    name: String,
+    item_type: ItemType,
 }
-impl DirectoryContents {
-    fn new() -> Self {
-        DirectoryContents {
-            dirs: vec![],
-            files: vec![],
-            count: 0,
-        }
+impl Item {
+    fn _is_dir(&self) -> bool {
+        matches!(self.item_type, ItemType::Directory)
     }
-    fn from(dirs: Vec<Directory>, files: Vec<File>) -> Self {
-        let count = (dirs.len() + files.len()) as u16;
-        DirectoryContents { dirs, files, count }
+    fn is_file(&self) -> bool {
+        matches!(self.item_type, ItemType::File)
     }
 }
+
 struct Fee {
     listening: bool,
     cwd: PathBuf,
@@ -47,7 +42,7 @@ struct Fee {
     stdout: Stdout,
     selection: u16,
     scroll: u16,
-    current_contents: DirectoryContents,
+    current_contents: Vec<Item>,
 }
 impl Fee {
     fn new(cwd: PathBuf, config: Config) -> Self {
@@ -58,7 +53,7 @@ impl Fee {
             stdout: stdout(),
             selection: 0,
             scroll: 0,
-            current_contents: DirectoryContents::new(),
+            current_contents: vec![],
         }
     }
     fn cleanup_terminal(&mut self) -> io::Result<()> {
@@ -99,7 +94,7 @@ impl Fee {
         self.stdout.flush()?;
         Ok(())
     }
-    fn get_cwd_contents(&self) -> io::Result<DirectoryContents> {
+    fn get_cwd_contents(&self) -> io::Result<Vec<Item>> {
         let mut dirs = vec![];
         let mut files = vec![];
 
@@ -112,13 +107,20 @@ impl Fee {
                 .to_string();
 
             if item_type.is_dir() {
-                dirs.push(Directory(item_name))
+                dirs.push(Item {
+                    name: item_name,
+                    item_type: ItemType::Directory,
+                })
             } else if item_type.is_file() {
-                files.push(File(item_name))
+                files.push(Item {
+                    name: item_name,
+                    item_type: ItemType::File,
+                })
             }
         }
-
-        Ok(DirectoryContents::from(dirs, files))
+        let mut items = dirs;
+        items.append(&mut files);
+        Ok(items)
     }
 
     fn print_line(
@@ -142,7 +144,6 @@ impl Fee {
         Ok(())
     }
     fn draw_text(&mut self) -> io::Result<()> {
-        let contents = self.current_contents.clone();
         let dir_color = Color::Rgb {
             r: self.config.dir_color[0],
             g: self.config.dir_color[1],
@@ -154,95 +155,78 @@ impl Fee {
             b: self.config.file_color[2],
         };
         for index in self.scroll..get_terminal_height()? + self.scroll {
-            let dirs_length = contents.dirs.len();
+            let length = self.current_contents.len();
 
-            if index >= contents.count as u16 {
+            if index >= length as u16 {
                 continue;
             }
-            if index < dirs_length as u16 {
-                let dir = &contents.dirs[index as usize];
-                self.print_line(
-                    &dir.0,
-                    0,
-                    index - self.scroll,
-                    dir_color,
-                    self.selection == index,
-                )?;
-            } else {
-                let file = &contents.files[index as usize - dirs_length];
-                self.print_line(
-                    &file.0,
-                    0,
-                    index - self.scroll,
-                    file_color,
-                    self.selection == index,
-                )?;
+            let item = &self.current_contents[index as usize];
+            let name = &item.name.to_owned();
+            let mut color = dir_color;
+
+            if item.is_file() {
+                color = file_color;
             }
+            self.print_line(name, 0, index - self.scroll, color, self.selection == index)?;
         }
         queue!(self.stdout, ResetColor)?;
         Ok(())
     }
     fn select(&mut self) -> io::Result<()> {
-        let contents = self.current_contents.clone();
-        let mut index = 0;
-        for dir in contents.dirs {
-            if index == self.selection {
-                self.cwd.push(&dir.0);
-                self.selection = 0;
-                self.scroll = 0;
-                self.current_contents = self.get_cwd_contents()?;
-                return Ok(());
-            }
-            index += 1;
-        }
-        for file in contents.files {
-            if index == self.selection {
-                let mut filepath = self.cwd.clone();
-                filepath.push(&file.0);
-
-                let mut parts: VecDeque<String> = [].into();
-                let mut command = &self.config.text_editor_command;
-                if self.config.text_editor_command != self.config.binary_editor_command {
-                    // if the binary editor != the text editor
-                    // check if the file is utf-8 or if it should be read with the binary editor
-                    if !is_valid_utf8(&filepath)? {
-                        command = &self.config.binary_editor_command;
+        for (index, item) in self.current_contents.iter().enumerate() {
+            if index as u16 == self.selection {
+                match item.item_type {
+                    ItemType::Directory => {
+                        self.cwd.push(&item.name);
+                        self.selection = 0;
+                        self.scroll = 0;
+                        self.current_contents = self.get_cwd_contents()?;
                     }
-                }
+                    ItemType::File => {
+                        let mut filepath = self.cwd.clone();
+                        filepath.push(&item.name);
 
-                let filepath_str = filepath
-                    .to_str()
-                    .ok_or(io::Error::other("Couldn't convert path to str."))?;
+                        let mut parts: VecDeque<String> = [].into();
+                        let mut command = &self.config.text_editor_command;
+                        if self.config.text_editor_command != self.config.binary_editor_command {
+                            // if the binary editor != the text editor
+                            // check if the file is utf-8 or if it should be read with the binary editor
+                            if !is_valid_utf8(&filepath)? {
+                                command = &self.config.binary_editor_command;
+                            }
+                        }
 
-                for part in command {
-                    if part == "$f" {
-                        parts.push_back(filepath_str.to_string());
-                    } else {
-                        parts.push_back(part.to_string());
-                    }
-                }
+                        let filepath_str = filepath
+                            .to_str()
+                            .ok_or(io::Error::other("Couldn't convert path to str."))?;
 
-                let first = parts.pop_front();
-                match first {
-                    Some(executable) => {
-                        let mut command = Command::new(executable);
-                        command.args(parts);
-                        self.cleanup_terminal()?;
-                        if self.config.wait_for_editor_exit {
-                            command.spawn()?.wait()?;
-                            self.prepare_terminal()?;
-                            self.update()?;
-                        } else {
-                            command.spawn()?;
-                            self.prepare_terminal()?;
-                            self.update()?;
+                        for part in command {
+                            if part == "$f" {
+                                parts.push_back(filepath_str.to_string());
+                            } else {
+                                parts.push_back(part.to_string());
+                            }
+                        }
+
+                        let first = parts.pop_front();
+                        if let Some(executable) = first {
+                            let mut command = Command::new(executable);
+                            command.args(parts);
+                            self.cleanup_terminal()?;
+                            if self.config.wait_for_editor_exit {
+                                command.spawn()?.wait()?;
+                                self.prepare_terminal()?;
+                                self.update()?;
+                            } else {
+                                command.spawn()?;
+                                self.prepare_terminal()?;
+                                self.update()?;
+                            }
                         }
                     }
-                    None => {}
                 }
                 break;
             }
-            index += 1;
         }
         Ok(())
     }
@@ -258,8 +242,11 @@ impl Fee {
     }
     fn move_up(&mut self) -> io::Result<()> {
         if self.selection == 0 {
-            self.selection = self.current_contents.count - 1;
-            self.scroll = self.current_contents.count - get_terminal_height()?;
+            self.selection = self.current_contents.len() as u16 - 1;
+            self.scroll = cmp::max(
+                0,
+                self.current_contents.len() as i16 - get_terminal_height()? as i16,
+            ) as u16;
         } else {
             self.selection -= 1;
             if self.scroll > self.selection {
@@ -269,7 +256,7 @@ impl Fee {
         Ok(())
     }
     fn move_down(&mut self) -> io::Result<()> {
-        if self.selection >= self.current_contents.count - 1 {
+        if self.selection >= self.current_contents.len() as u16 - 1 {
             self.selection = 0;
             self.scroll = 0;
         } else {
