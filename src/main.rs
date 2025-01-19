@@ -16,20 +16,12 @@ use crossterm::{
 use dirs::config_dir;
 use serde::{Deserialize, Serialize};
 
-struct Fee {
-    listening: bool,
-    cwd: PathBuf,
-    config: Config,
-    stdout: Stdout,
-    selection: u16,
-    current_contents: DirectoryContents,
-}
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Directory(String);
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct File(String);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DirectoryContents {
     dirs: Vec<Directory>,
     files: Vec<File>,
@@ -48,7 +40,15 @@ impl DirectoryContents {
         DirectoryContents { dirs, files, count }
     }
 }
-
+struct Fee {
+    listening: bool,
+    cwd: PathBuf,
+    config: Config,
+    stdout: Stdout,
+    selection: u16,
+    scroll: u16,
+    current_contents: DirectoryContents,
+}
 impl Fee {
     fn new(cwd: PathBuf, config: Config) -> Self {
         Fee {
@@ -57,6 +57,7 @@ impl Fee {
             config,
             stdout: stdout(),
             selection: 0,
+            scroll: 0,
             current_contents: DirectoryContents::new(),
         }
     }
@@ -142,24 +143,41 @@ impl Fee {
     }
     fn draw_text(&mut self) -> io::Result<()> {
         let contents = self.current_contents.clone();
-        let mut index = 0;
         let dir_color = Color::Rgb {
             r: self.config.dir_color[0],
             g: self.config.dir_color[1],
             b: self.config.dir_color[2],
         };
-        for dir in contents.dirs {
-            self.print_line(&dir.0, 0, index, dir_color, self.selection == index)?;
-            index += 1;
-        }
         let file_color = Color::Rgb {
             r: self.config.file_color[0],
             g: self.config.file_color[1],
             b: self.config.file_color[2],
         };
-        for file in contents.files {
-            self.print_line(&file.0, 0, index, file_color, self.selection == index)?;
-            index += 1;
+        for index in self.scroll..get_terminal_height()? + self.scroll {
+            let dirs_length = contents.dirs.len();
+
+            if index >= contents.count as u16 {
+                continue;
+            }
+            if index < dirs_length as u16 {
+                let dir = &contents.dirs[index as usize];
+                self.print_line(
+                    &dir.0,
+                    0,
+                    index - self.scroll,
+                    dir_color,
+                    self.selection == index,
+                )?;
+            } else {
+                let file = &contents.files[index as usize - dirs_length];
+                self.print_line(
+                    &file.0,
+                    0,
+                    index - self.scroll,
+                    file_color,
+                    self.selection == index,
+                )?;
+            }
         }
         queue!(self.stdout, ResetColor)?;
         Ok(())
@@ -171,6 +189,7 @@ impl Fee {
             if index == self.selection {
                 self.cwd.push(&dir.0);
                 self.selection = 0;
+                self.scroll = 0;
                 self.current_contents = self.get_cwd_contents()?;
                 return Ok(());
             }
@@ -219,9 +238,7 @@ impl Fee {
                             self.update()?;
                         }
                     }
-                    None => {
-                        println!("No");
-                    }
+                    None => {}
                 }
                 break;
             }
@@ -234,30 +251,41 @@ impl Fee {
         if let Some(parent) = parent {
             self.cwd = parent.to_path_buf();
             self.selection = 0;
+            self.scroll = 0;
             self.current_contents = self.get_cwd_contents()?;
         }
         Ok(())
     }
-    fn move_up(&mut self) {
+    fn move_up(&mut self) -> io::Result<()> {
         if self.selection == 0 {
             self.selection = self.current_contents.count - 1;
+            self.scroll = self.current_contents.count - get_terminal_height()?;
         } else {
             self.selection -= 1;
+            if self.scroll > self.selection {
+                self.scroll -= 1;
+            }
         }
+        Ok(())
     }
-    fn move_down(&mut self) {
+    fn move_down(&mut self) -> io::Result<()> {
         if self.selection >= self.current_contents.count - 1 {
             self.selection = 0;
+            self.scroll = 0;
         } else {
             self.selection += 1;
+            if self.selection - self.scroll >= get_terminal_height()? {
+                self.scroll += 1;
+            }
         }
+        Ok(())
     }
     fn handle_keypress(&mut self, event: Event) -> io::Result<()> {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
                 match key.code {
-                    KeyCode::Up => self.move_up(),
-                    KeyCode::Down => self.move_down(),
+                    KeyCode::Up => self.move_up()?,
+                    KeyCode::Down => self.move_down()?,
                     KeyCode::Enter => self.select()?,
                     KeyCode::Right => self.select()?,
                     KeyCode::Esc => self.go_back()?,
@@ -305,6 +333,10 @@ impl Config {
             file_color: [46, 199, 219],
         }
     }
+}
+
+fn get_terminal_height() -> io::Result<u16> {
+    Ok(crossterm::terminal::size()?.1 - 1)
 }
 
 fn is_valid_utf8(path: &PathBuf) -> io::Result<bool> {
